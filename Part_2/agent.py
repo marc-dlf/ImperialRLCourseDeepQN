@@ -89,7 +89,6 @@ class Agent:
 
         self.total_reward+= reward
 
-
     # Function to get the greedy action for a particular state
     def get_greedy_action(self,state):
         input_tensor = torch.tensor(state.reshape(1,2).astype(np.float32))
