@@ -20,8 +20,6 @@ import torch
 import time
 from collections import deque
 
-import numpy as np
-
 class Agent:
 
     # Function to initialise the agent
