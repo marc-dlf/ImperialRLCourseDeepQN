@@ -136,6 +136,9 @@ class QNetworkViz(object):
         cv2.imshow("Environment", self.img)
         cv2.waitKey(1)
 
+    def save_img(self,path):
+         cv2.imwrite(path,self.img)
+
     def reset(self):
         self.img = np.zeros([self.height,
                              self.width,
