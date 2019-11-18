@@ -25,7 +25,7 @@ class Agent:
     # Function to initialise the agent
     def __init__(self):
         # Set the episode length
-        self.episode_length = 1000
+        self.episode_length = 500
         # Reset the total number of steps which the agent has taken
         self.num_steps_taken = 0
         # The state variable stores the latest state of the agent in the environment
@@ -40,7 +40,7 @@ class Agent:
         self.total_reward = 0
         #epsilon
         self.epsilon = 1
-
+        self.delta = 0.001
 
     # Function to check whether the agent has reached the end of an episode
     def has_finished_episode(self):
@@ -62,7 +62,7 @@ class Agent:
         probas[greedy_action] = 1-self.epsilon + (self.epsilon/4)
         discrete_action = np.random.choice(actions,p=probas)
 
-        self.epsilon -= 0.001
+        self.epsilon -= self.delta
 
         action = self._discrete_action_to_continuous(discrete_action)
         # Update the number of steps which the agent has taken
@@ -182,7 +182,7 @@ class DQN:
 
         ### Computing the actual Q value for this step
 
-        #target_q_values = self.q_network.forward(next_states_tensor).detach()
+        #target_q_values = self.q_network.forward(next_states_tensor)
         target_q_values = self.target_network.forward(next_states_tensor)
         target_q_values = torch.gather(target_q_values,1, target_q_values.argmax(1).view(batch_size,1))
 
@@ -216,32 +216,6 @@ class DQN:
 
         return best_action
 
-    def get_qvalues(self,mode):
-
-        if mode == 0:
-            qvalues = np.zeros((10,10,4))
-            for i in range(10):
-                for j in range(10):
-                    for action in range(4):
-                        input_state_action = np.array([(0.05 + i*0.1),(0.05 + j*0.1),action]).reshape(1,3).astype(np.float32)
-                        input_tensor = torch.tensor(input_state_action)
-                        predicted_qvalue = self.q_network.forward(input_tensor)
-                        qvalues[i,j,action] = predicted_qvalue
-            return qvalues
-
-        elif mode ==1 :
-            qvalues = np.zeros((10,10,4))
-            for i in range(10):
-                for j in range(10):
-                    input_state = np.array([(0.05 + i*0.1),(0.05 + j*0.1)]).reshape(1,2).astype(np.float32)
-                    input_tensor = torch.tensor(input_state)
-                    predicted_qvalues = self.q_network.forward(input_tensor)
-                    qvalues[i,j,:] = predicted_qvalues.detach().numpy().reshape(4)
-            return qvalues
-
-        else:
-            raise ValueError('mode must be either 0 or 1')
-
 # The Network class inherits the torch.nn.Module class, which represents a neural network.
 class Network(torch.nn.Module):
 
@@ -262,6 +236,7 @@ class Network(torch.nn.Module):
         return output
 
 class ReplayBuffer(deque):
+    #Find moment where agent has difficulties and focus on them : for example, best reward since long time
     def __init__(self,min_size):
         super().__init__([],10**6)
         self.min_size = min_size
