@@ -37,7 +37,7 @@ class Agent:
         self.action = None
         # Replay Buffer
         # DeepQNetwork defining agent actions
-        self.dqn = DQN(gamma = 0.8)
+        self.dqn = DQN(gamma = 0.5)
         #Reward
         self.total_reward = 0
         #epsilon
@@ -93,16 +93,19 @@ class Agent:
         input_tensor = torch.tensor(state.reshape(1,2).astype(np.float32))
         q_values = self.dqn.q_network.forward(input_tensor).detach()
         greedy_action = int(q_values.argmax(1).numpy())
-        print(self.epsilon)
 
         #print(self.rightmost_ep)
+        print(self.epsilon)
         print(self.goal_reached_last_ep)
         if self.greedy_mode:
             print("a")
             action = self.get_greedy_action(state)
         else:
-            if (self.last_time_agent_got_more_right>=30):
-                #print(self.direction_up)
+            if (self.last_time_agent_got_more_right>=200) and self.is_frontier():
+                print("cheating")
+                if self.direction_up is None:
+                    best_action = np.argmax(q_values.reshape(4)[[1,3]])
+                    self.direction_up = best_action
                 if self.stuck == True:
                     self.direction_up = not self.direction_up
                 if self.direction_up:
@@ -110,6 +113,7 @@ class Agent:
                 else:
                     discrete_action = np.random.choice([0,1],p=[0.5,0.5])
             else:
+                self.direction_up=None
                 if self.num_steps_taken_ep>200 and self.is_frontier() and (not self.goal_reached_last_ep):
                     self.epsilon = np.max([self.epsilon,0.15])
                 actions = np.arange(0,4)
@@ -134,23 +138,21 @@ class Agent:
     def set_next_state_and_distance(self, next_state, distance_to_goal):
         # Convert the distance to a reward
         reward = (0.8 - distance_to_goal)
-        if (self.state[0] > next_state[0]):
-            reward -= 5
+        #if (self.state[0] > next_state[0]):
+        #    reward -= 5
 
-        if (self.state[0] < next_state[0]):
-            reward += 5*np.max([0.1,next_state[0]])
-
+        reward += (next_state[0] - self.state[0])*5
         if (self.state[0]==next_state[0]):
-            reward -= 0.1
+            reward -= 0.02
 
         if (self.state == next_state).all():
-            reward -= 5
+            reward -= 1
 
         if (self.has_reached_goal()):
-            reward +=100
+            reward +=10
 
-        if (self.state[0]>0.8):
-            reward += 0.3
+        #if (self.state[0]>0.8):
+        #    reward += 0.3
 
         print(reward)
         self.last_distance_to_goal = distance_to_goal
@@ -166,14 +168,14 @@ class Agent:
 
         self.is_stuck(self.action,self.state,next_state)
 
-        if (self.num_steps_taken % 20):
+        if (self.num_steps_taken % 50):
             self.dqn.update_target_network()
         # Create a transition
         transition = (self.state, self.action, reward, next_state)
         # Add this transition to the replay buffer (state,action,reward,next_state,transition_index,initial wieght)
         transition_discrete = (self.state, self._continuous_action_to_discrete(self.action),
-                               reward, next_state,self.num_steps_taken-1)
-        
+                               reward, next_state)
+
         self.dqn.replay_buffer.add_weight()
         self.dqn.replay_buffer.append(transition_discrete)
 
@@ -199,8 +201,12 @@ class Agent:
             continuous_action = np.array([0, -0.02], dtype=np.float32)
         elif discrete_action == 2:#Move left
             continuous_action = np.array([-0.02, 0], dtype=np.float32)
-        else :#Move up
+        elif discrete_action == 3 :#Move up
             continuous_action = np.array([0, 0.02], dtype=np.float32)
+        #elif discrete_action == 4: #diago up
+        #    continuous_action = np.array([0.01, 0.01], dtype=np.float32)
+        #elif discrete_action == 5: #diago down
+        #    continuous_action = np.array([0.01, -0.01], dtype=np.float32)
         return continuous_action
 
     def _continuous_action_to_discrete(self, continuous_action):
@@ -212,6 +218,10 @@ class Agent:
             discrete_action = 2
         elif (continuous_action == np.array([0, 0.02], dtype=np.float32)).all() :#Move up
             discrete_action = 3
+        #elif (continuous_action == np.array([0.01, 0.01], dtype=np.float32)).all():
+        #    discrete_action = 4
+        #elif (continuous_action == np.array([0.01, -0.01], dtype=np.float32)).all():
+        #    continuous_action =5
         else:
             raise ValueError('not one of actions permited')
         return discrete_action
@@ -238,11 +248,11 @@ class DQN:
         # Create a Q-network, which predicts the q-value for a particular state.
         self.q_network = Network(input_dimension=2, output_dimension=4)
         # Define the optimiser which is used when updating the Q-network. The learning rate determines how big each gradient step is during backpropagation.
-        self.optimiser = torch.optim.Adam(self.q_network.parameters(), lr=0.005)
+        self.optimiser = torch.optim.Adam(self.q_network.parameters(), lr=0.001)
         self.target_network = Network(input_dimension=2, output_dimension=4)
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.gamma = gamma
-        self.replay_buffer = ReplayBuffer(min_size=50,max_size=200)
+        self.replay_buffer = ReplayBuffer(min_size=50,max_size=10**6)
 
     # Function that is called whenever we want to train the Q-network. Each call to this function takes in a transition tuple containing the data we use to update the Q-network.
     def train_q_network(self, transition):
@@ -364,7 +374,7 @@ class ReplayBuffer(deque):
         if len(self.weights)==0:
             self.weights = np.append(self.weights,1)
         else:
-            if len(self)==max_size:
+            if len(self)==self.max_size:
                 self.weights = np.append(self.weights[1:],np.max(self.weights))
             else:
                 self.weights = np.append(self.weights,np.max(self.weights))
@@ -383,7 +393,7 @@ class ReplayBuffer(deque):
         try:
             minibatch = []
             for i in range(len(idx)):
-                minibatch += [self[idx[i]]]
+                minibatch += [self[idx[i]]+(idx[i],)]
         except:
             raise ValueError("Replay Buffer is not full enough")
 
