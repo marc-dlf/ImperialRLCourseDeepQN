@@ -25,27 +25,45 @@ class Agent:
     # Function to initialise the agent
     def __init__(self):
         # Set the episode length
-        self.episode_length = 500
+        self.episode_length = 600
+        self.num_episode_completed = 0
         # Reset the total number of steps which the agent has taken
         self.num_steps_taken = 0
+        self.num_steps_taken_ep = 0
         # The state variable stores the latest state of the agent in the environment
         self.state = None
         # The action variable stores the latest action which the agent has applied to the environment
         self.action = None
-        # DeepQNetwork defining agent actions
-        self.dqn = DQN()
         # Replay Buffer
-        self.replay_buffer = ReplayBuffer(min_size=50)
+        # DeepQNetwork defining agent actions
+        self.dqn = DQN(gamma = 0.9)
         #Reward
         self.total_reward = 0
         #epsilon
         self.epsilon = 1
-        self.delta = 0.001
+        self.delta = 0.002
+        self.stuck = False
+
+        ## last time the reward increased
+        self.rightmost_ep = -100
+        self.rightmost_ever = -100
+        self.last_time_agent_got_more_right = 0
+
+        self.last_distance_to_goal = 1
+
+        self.direction_up = True
 
     # Function to check whether the agent has reached the end of an episode
     def has_finished_episode(self):
-        if self.num_steps_taken % self.episode_length == 0:
-            self.epsilon = 1
+        if ((self.num_steps_taken % self.episode_length == 0) and (self.num_steps_taken!= 0)) or (self.last_distance_to_goal<=0.03):
+            self.num_episode_completed+=1
+            if 1-(self.num_episode_completed/20)>0.1:
+                self.epsilon = 1-self.num_episode_completed/20
+            else:
+                self.epsilon = 0.1
+            self.rightmost_ep = 0
+            self.num_steps_taken_ep = 0
+
             return True
         else:
             return False
@@ -54,37 +72,83 @@ class Agent:
     def get_next_action(self, state):
         # Here, the action is random, but you can change this
         input_tensor = torch.tensor(state.reshape(1,2).astype(np.float32))
-        q_values = self.dqn.q_network.forward(input_tensor)
+        q_values = self.dqn.q_network.forward(input_tensor).detach()
         greedy_action = int(q_values.argmax(1).numpy())
+        print(self.epsilon)
 
-        actions = np.arange(0,4)
-        probas = np.ones(4)*(self.epsilon/4)
-        probas[greedy_action] = 1-self.epsilon + (self.epsilon/4)
-        discrete_action = np.random.choice(actions,p=probas)
-
-        self.epsilon -= self.delta
+        #print(self.rightmost_ep)
+        if (self.last_time_agent_got_more_right>=30):
+            #print(self.direction_up)
+            if self.stuck == True:
+                switch_direction = True
+            else:
+                switch_direction = np.random.choice([0,1],p=[0.99,0.01])
+            if switch_direction:
+                self.direction_up = not self.direction_up
+            if self.direction_up:
+                discrete_action = np.random.choice([0,3],p=[0.5,0.5])
+            else:
+                discrete_action = np.random.choice([0,1],p=[0.5,0.5])
+        else:
+            if self.num_steps_taken_ep>200 and self.is_frontier():
+                self.epsilon = 0.15
+            actions = np.arange(0,4)
+            probas = np.ones(4)*(self.epsilon/4)
+            probas[greedy_action] = 1-self.epsilon + (self.epsilon/4)
+            discrete_action = np.random.choice(actions,p=probas)
+            if (self.epsilon-self.delta)>=0.04:
+                self.epsilon -= self.delta
 
         action = self._discrete_action_to_continuous(discrete_action)
         # Update the number of steps which the agent has taken
         self.num_steps_taken += 1
+        self.num_steps_taken_ep += 1
         # Store the state; this will be used later, when storing the transition
         self.state = state
         # Store the action; this will be used later, when storing the transition
         self.action = action
         return action
 
+
     # Function to set the next state and distance, which resulted from applying action self.action at state self.state
     def set_next_state_and_distance(self, next_state, distance_to_goal):
         # Convert the distance to a reward
         reward = 1 - distance_to_goal
+        if (self.state[0] > next_state[0]):
+            reward -= 0.3
+
+        if (self.state[0] == next_state[0]):
+            reward -= 0.2
+
+        if (self.state == next_state).all():
+            reward -= 0.6
+
+        self.last_distance_to_goal = distance_to_goal
+
+        if self.rightmost_ep<self.state[0]:
+            self.rightmost_ep = self.state[0]
+            self.last_time_agent_got_more_right = 0
+
+            if self.rightmost_ever<self.state[0]:
+                self.rightmost_ever = self.state[0]
+        else:
+            self.last_time_agent_got_more_right+= 1
+
+        self.is_stuck(self.action,self.state,next_state)
+
+        if (self.num_steps_taken % 50):
+            self.dqn.update_target_network()
         # Create a transition
         transition = (self.state, self.action, reward, next_state)
-        # Add this transition to the replay buffer
-        transition_discrete = (self.state, self._continuous_action_to_discrete(self.action), reward, next_state)
-        self.replay_buffer.append(transition_discrete)
+        # Add this transition to the replay buffer (state,action,reward,next_state,transition_index,initial wieght)
+        transition_discrete = (self.state, self._continuous_action_to_discrete(self.action),
+                               reward, next_state,self.num_steps_taken-1)
 
-        if self.replay_buffer.is_full_enough():
-            mini_batch = self.replay_buffer.get_minibatch()
+        self.dqn.replay_buffer.append(transition_discrete)
+        self.dqn.replay_buffer.add_weight()
+
+        if self.dqn.replay_buffer.is_full_enough():
+            mini_batch = self.dqn.replay_buffer.get_minibatch()
             loss = self.dqn.train_q_network(mini_batch)
 
         self.total_reward+= reward
@@ -92,7 +156,7 @@ class Agent:
     # Function to get the greedy action for a particular state
     def get_greedy_action(self,state):
         input_tensor = torch.tensor(state.reshape(1,2).astype(np.float32))
-        q_values = self.dqn.q_network.forward(input_tensor)
+        q_values = self.dqn.q_network.forward(input_tensor).detach()
         action = self._discrete_action_to_continuous(int(q_values.argmax(1).numpy()))
         return action
 
@@ -121,16 +185,30 @@ class Agent:
             raise ValueError('not one of actions permited')
         return discrete_action
 
+    def is_stuck(self,action,state,next_state):
+        if (self._continuous_action_to_discrete(action)==1 or self._continuous_action_to_discrete(action)==3) and (state==next_state).all():
+            self.stuck = True
+        else:
+            self.stuck = False
+
+    def is_frontier(self):
+        if self.rightmost_ep - self.state[0]<=0.04:
+            return True
+        else:
+            return False
+
 class DQN:
 
     # The class initialisation function.
-    def __init__(self):
+    def __init__(self,gamma):
         # Create a Q-network, which predicts the q-value for a particular state.
         self.q_network = Network(input_dimension=2, output_dimension=4)
         # Define the optimiser which is used when updating the Q-network. The learning rate determines how big each gradient step is during backpropagation.
         self.optimiser = torch.optim.Adam(self.q_network.parameters(), lr=0.001)
         self.target_network = Network(input_dimension=2, output_dimension=4)
         self.target_network.load_state_dict(self.q_network.state_dict())
+        self.gamma = gamma
+        self.replay_buffer = ReplayBuffer(min_size=50)
 
     # Function that is called whenever we want to train the Q-network. Each call to this function takes in a transition tuple containing the data we use to update the Q-network.
     def train_q_network(self, transition):
@@ -154,9 +232,9 @@ class DQN:
     # Function to calculate the loss for a particular transition.
     def _calculate_loss(self,transition):
 
-        gamma = 0.9
         batch_size = len(transition)
-        transition = np.array(transition).reshape(batch_size,4)
+        transition = np.array(transition).reshape(batch_size,5)
+        transition_idx = transition[:,4].reshape(batch_size).astype(np.int64)
 
         states_batch = np.array([state.reshape(1,2) for state in transition[:,0]])
         next_states_batch = np.array([state.reshape(1,2) for state in transition[:,3]])
@@ -186,7 +264,11 @@ class DQN:
         target_q_values = self.target_network.forward(next_states_tensor)
         target_q_values = torch.gather(target_q_values,1, target_q_values.argmax(1).view(batch_size,1))
 
-        predicted_sum_future_rewards = reward_tensor.add(target_q_values*gamma)
+        predicted_sum_future_rewards = reward_tensor.add(target_q_values*self.gamma)
+        weights_updated = predicted_sum_future_rewards.detach().numpy().reshape(batch_size)
+
+        self.replay_buffer.weights[transition_idx] = np.abs(weights_updated) + 0.01
+
         loss = torch.nn.MSELoss()(q_values, predicted_sum_future_rewards)
 
         return loss
@@ -240,12 +322,22 @@ class ReplayBuffer(deque):
     def __init__(self,min_size):
         super().__init__([],10**6)
         self.min_size = min_size
+        self.weights = np.array([])
+
+    def add_weight(self):
+        if len(self.weights)==0:
+            self.weights = np.append(self.weights,1)
+        else:
+            self.weights = np.append(self.weights,np.max(self.weights))
+
+    def normalized_weights(self,alpha=0.5):
+        return np.power(self.weights,alpha)/np.sum(np.power(self.weights,alpha))
 
     def is_full_enough(self):
         return len(self)>=self.min_size
 
     def get_minibatch(self):
-        idx = np.random.choice(np.arange(0,len(self)),self.min_size,replace=False)
+        idx = np.random.choice(np.arange(0,len(self)),self.min_size,p=self.normalized_weights(),replace=False)
         try:
             minibatch = []
             for i in range(len(idx)):
