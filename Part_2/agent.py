@@ -104,7 +104,7 @@ class Agent:
             if (self.last_time_agent_got_more_right>=200) and self.is_frontier():
                 print("cheating")
                 if self.direction_up is None:
-                    best_action = np.argmax(q_values.reshape(4)[[1,3]])
+                    best_action = np.argmax(q_values.reshape(6)[[1,3]])
                     self.direction_up = best_action
                 if self.stuck == True:
                     self.direction_up = not self.direction_up
@@ -116,9 +116,9 @@ class Agent:
                 self.direction_up=None
                 if self.num_steps_taken_ep>200 and self.is_frontier() and (not self.goal_reached_last_ep):
                     self.epsilon = np.max([self.epsilon,0.15])
-                actions = np.arange(0,4)
-                probas = np.ones(4)*(self.epsilon/4)
-                probas[greedy_action] = 1-self.epsilon + (self.epsilon/4)
+                actions = np.arange(0,6)
+                probas = np.ones(6)*(self.epsilon/6)
+                probas[greedy_action] = 1-self.epsilon + (self.epsilon/6)
                 discrete_action = np.random.choice(actions,p=probas)
                 if (self.epsilon-self.delta)>=0.01:
                     self.epsilon -= self.delta
@@ -203,10 +203,10 @@ class Agent:
             continuous_action = np.array([-0.02, 0], dtype=np.float32)
         elif discrete_action == 3 :#Move up
             continuous_action = np.array([0, 0.02], dtype=np.float32)
-        #elif discrete_action == 4: #diago up
-        #    continuous_action = np.array([0.01, 0.01], dtype=np.float32)
-        #elif discrete_action == 5: #diago down
-        #    continuous_action = np.array([0.01, -0.01], dtype=np.float32)
+        elif discrete_action == 4: #diago up
+            continuous_action = np.array([0.01, 0.01], dtype=np.float32)
+        elif discrete_action == 5: #diago down
+            continuous_action = np.array([0.01, -0.01], dtype=np.float32)
         return continuous_action
 
     def _continuous_action_to_discrete(self, continuous_action):
@@ -218,10 +218,10 @@ class Agent:
             discrete_action = 2
         elif (continuous_action == np.array([0, 0.02], dtype=np.float32)).all() :#Move up
             discrete_action = 3
-        #elif (continuous_action == np.array([0.01, 0.01], dtype=np.float32)).all():
-        #    discrete_action = 4
-        #elif (continuous_action == np.array([0.01, -0.01], dtype=np.float32)).all():
-        #    continuous_action =5
+        elif (continuous_action == np.array([0.01, 0.01], dtype=np.float32)).all():
+            discrete_action = 4
+        elif (continuous_action == np.array([0.01, -0.01], dtype=np.float32)).all():
+            discrete_action =5
         else:
             raise ValueError('not one of actions permited')
         return discrete_action
@@ -246,10 +246,10 @@ class DQN:
     # The class initialisation function.
     def __init__(self,gamma):
         # Create a Q-network, which predicts the q-value for a particular state.
-        self.q_network = Network(input_dimension=2, output_dimension=4)
+        self.q_network = Network(input_dimension=2, output_dimension=6)
         # Define the optimiser which is used when updating the Q-network. The learning rate determines how big each gradient step is during backpropagation.
         self.optimiser = torch.optim.Adam(self.q_network.parameters(), lr=0.001)
-        self.target_network = Network(input_dimension=2, output_dimension=4)
+        self.target_network = Network(input_dimension=2, output_dimension=6)
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.gamma = gamma
         self.replay_buffer = ReplayBuffer(min_size=50,max_size=10**6)
