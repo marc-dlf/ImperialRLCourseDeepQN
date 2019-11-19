@@ -26,6 +26,7 @@ class Agent:
     def __init__(self):
         # Set the episode length
         self.episode_length = 600
+        self.episode_length_greedy = 100
         self.num_episode_completed = 0
         # Reset the total number of steps which the agent has taken
         self.num_steps_taken = 0
@@ -36,12 +37,12 @@ class Agent:
         self.action = None
         # Replay Buffer
         # DeepQNetwork defining agent actions
-        self.dqn = DQN(gamma = 0.9)
+        self.dqn = DQN(gamma = 0.8)
         #Reward
         self.total_reward = 0
         #epsilon
         self.epsilon = 1
-        self.delta = 0.002
+        self.delta = 0.001
         self.stuck = False
 
         ## last time the reward increased
@@ -52,10 +53,28 @@ class Agent:
         self.last_distance_to_goal = 1
 
         self.direction_up = True
+        self.goal_reached_last_ep = False
+        self.greedy_mode = False
 
     # Function to check whether the agent has reached the end of an episode
     def has_finished_episode(self):
-        if ((self.num_steps_taken % self.episode_length == 0) and (self.num_steps_taken!= 0)) or (self.last_distance_to_goal<=0.03):
+        #if self.greedy_mode:
+        #    if ((self.num_steps_taken_ep % self.episode_length_greedy == 0) and (self.num_steps_taken_ep!= 0)):
+        #        self.greedy_mode = not self.greedy_mode
+        #        return True
+        #    else:
+        #        return False
+        if ((self.num_steps_taken_ep % self.episode_length == 0) and (self.num_steps_taken_ep!= 0)) or (self.has_reached_goal()):
+            #if self.num_steps_taken>=self.episode_length*6:
+            #    self.dqn.replay_buffer.discard_weights(before = self.num_steps_taken - 3*self.episode_length)
+            print('Starting new episode')
+            if self.has_reached_goal():
+                self.goal_reached_last_ep = True
+            else:
+                self.goal_reached_last_ep = False
+
+            #self.greedy_mode = not self.greedy_mode
+
             self.num_episode_completed+=1
             if 1-(self.num_episode_completed/20)>0.1:
                 self.epsilon = 1-self.num_episode_completed/20
@@ -77,29 +96,30 @@ class Agent:
         print(self.epsilon)
 
         #print(self.rightmost_ep)
-        if (self.last_time_agent_got_more_right>=30):
-            #print(self.direction_up)
-            if self.stuck == True:
-                switch_direction = True
-            else:
-                switch_direction = np.random.choice([0,1],p=[0.99,0.01])
-            if switch_direction:
-                self.direction_up = not self.direction_up
-            if self.direction_up:
-                discrete_action = np.random.choice([0,3],p=[0.5,0.5])
-            else:
-                discrete_action = np.random.choice([0,1],p=[0.5,0.5])
+        print(self.goal_reached_last_ep)
+        if self.greedy_mode:
+            print("a")
+            action = self.get_greedy_action(state)
         else:
-            if self.num_steps_taken_ep>200 and self.is_frontier():
-                self.epsilon = 0.15
-            actions = np.arange(0,4)
-            probas = np.ones(4)*(self.epsilon/4)
-            probas[greedy_action] = 1-self.epsilon + (self.epsilon/4)
-            discrete_action = np.random.choice(actions,p=probas)
-            if (self.epsilon-self.delta)>=0.04:
-                self.epsilon -= self.delta
+            if (self.last_time_agent_got_more_right>=30):
+                #print(self.direction_up)
+                if self.stuck == True:
+                    self.direction_up = not self.direction_up
+                if self.direction_up:
+                    discrete_action = np.random.choice([0,3],p=[0.5,0.5])
+                else:
+                    discrete_action = np.random.choice([0,1],p=[0.5,0.5])
+            else:
+                if self.num_steps_taken_ep>200 and self.is_frontier() and (not self.goal_reached_last_ep):
+                    self.epsilon = np.max([self.epsilon,0.15])
+                actions = np.arange(0,4)
+                probas = np.ones(4)*(self.epsilon/4)
+                probas[greedy_action] = 1-self.epsilon + (self.epsilon/4)
+                discrete_action = np.random.choice(actions,p=probas)
+                if (self.epsilon-self.delta)>=0.01:
+                    self.epsilon -= self.delta
+            action = self._discrete_action_to_continuous(discrete_action)
 
-        action = self._discrete_action_to_continuous(discrete_action)
         # Update the number of steps which the agent has taken
         self.num_steps_taken += 1
         self.num_steps_taken_ep += 1
@@ -113,16 +133,26 @@ class Agent:
     # Function to set the next state and distance, which resulted from applying action self.action at state self.state
     def set_next_state_and_distance(self, next_state, distance_to_goal):
         # Convert the distance to a reward
-        reward = 1 - distance_to_goal
+        reward = (0.8 - distance_to_goal)
         if (self.state[0] > next_state[0]):
-            reward -= 0.3
+            reward -= 5
 
-        if (self.state[0] == next_state[0]):
-            reward -= 0.2
+        if (self.state[0] < next_state[0]):
+            reward += 5*np.max([0.1,next_state[0]])
+
+        if (self.state[0]==next_state[0]):
+            reward -= 0.1
 
         if (self.state == next_state).all():
-            reward -= 0.6
+            reward -= 5
 
+        if (self.has_reached_goal()):
+            reward +=100
+
+        if (self.state[0]>0.8):
+            reward += 0.3
+
+        print(reward)
         self.last_distance_to_goal = distance_to_goal
 
         if self.rightmost_ep<self.state[0]:
@@ -136,22 +166,23 @@ class Agent:
 
         self.is_stuck(self.action,self.state,next_state)
 
-        if (self.num_steps_taken % 50):
+        if (self.num_steps_taken % 20):
             self.dqn.update_target_network()
         # Create a transition
         transition = (self.state, self.action, reward, next_state)
         # Add this transition to the replay buffer (state,action,reward,next_state,transition_index,initial wieght)
         transition_discrete = (self.state, self._continuous_action_to_discrete(self.action),
                                reward, next_state,self.num_steps_taken-1)
-
-        self.dqn.replay_buffer.append(transition_discrete)
+        
         self.dqn.replay_buffer.add_weight()
+        self.dqn.replay_buffer.append(transition_discrete)
 
         if self.dqn.replay_buffer.is_full_enough():
-            mini_batch = self.dqn.replay_buffer.get_minibatch()
+            mini_batch = self.dqn.replay_buffer.get_minibatch(alpha=0.7)
             loss = self.dqn.train_q_network(mini_batch)
 
         self.total_reward+= reward
+
 
     # Function to get the greedy action for a particular state
     def get_greedy_action(self,state):
@@ -197,6 +228,9 @@ class Agent:
         else:
             return False
 
+    def has_reached_goal(self):
+        return self.last_distance_to_goal<=0.03
+
 class DQN:
 
     # The class initialisation function.
@@ -204,11 +238,11 @@ class DQN:
         # Create a Q-network, which predicts the q-value for a particular state.
         self.q_network = Network(input_dimension=2, output_dimension=4)
         # Define the optimiser which is used when updating the Q-network. The learning rate determines how big each gradient step is during backpropagation.
-        self.optimiser = torch.optim.Adam(self.q_network.parameters(), lr=0.001)
+        self.optimiser = torch.optim.Adam(self.q_network.parameters(), lr=0.005)
         self.target_network = Network(input_dimension=2, output_dimension=4)
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.gamma = gamma
-        self.replay_buffer = ReplayBuffer(min_size=50)
+        self.replay_buffer = ReplayBuffer(min_size=50,max_size=200)
 
     # Function that is called whenever we want to train the Q-network. Each call to this function takes in a transition tuple containing the data we use to update the Q-network.
     def train_q_network(self, transition):
@@ -265,9 +299,10 @@ class DQN:
         target_q_values = torch.gather(target_q_values,1, target_q_values.argmax(1).view(batch_size,1))
 
         predicted_sum_future_rewards = reward_tensor.add(target_q_values*self.gamma)
-        weights_updated = predicted_sum_future_rewards.detach().numpy().reshape(batch_size)
-
-        self.replay_buffer.weights[transition_idx] = np.abs(weights_updated) + 0.01
+        weights_updated = predicted_sum_future_rewards.detach().numpy().reshape(batch_size) - q_values.detach().numpy().reshape(batch_size)
+        #weights_updated = np.vstack((weights_updated,np.zeros(batch_size)))
+        #weights_updated = np.max(weights_updated,axis = 0)
+        self.replay_buffer.weights[transition_idx] = np.abs(weights_updated) + 0.0001
 
         loss = torch.nn.MSELoss()(q_values, predicted_sum_future_rewards)
 
@@ -319,25 +354,32 @@ class Network(torch.nn.Module):
 
 class ReplayBuffer(deque):
     #Find moment where agent has difficulties and focus on them : for example, best reward since long time
-    def __init__(self,min_size):
-        super().__init__([],10**6)
+    def __init__(self,min_size,max_size):
+        super().__init__([],max_size)
         self.min_size = min_size
         self.weights = np.array([])
+        self.max_size = max_size
 
     def add_weight(self):
         if len(self.weights)==0:
             self.weights = np.append(self.weights,1)
         else:
-            self.weights = np.append(self.weights,np.max(self.weights))
+            if len(self)==max_size:
+                self.weights = np.append(self.weights[1:],np.max(self.weights))
+            else:
+                self.weights = np.append(self.weights,np.max(self.weights))
 
-    def normalized_weights(self,alpha=0.5):
+    def normalized_weights(self,alpha=0):
         return np.power(self.weights,alpha)/np.sum(np.power(self.weights,alpha))
 
     def is_full_enough(self):
         return len(self)>=self.min_size
 
-    def get_minibatch(self):
-        idx = np.random.choice(np.arange(0,len(self)),self.min_size,p=self.normalized_weights(),replace=False)
+    def discard_weights(self,before):
+        self.weights[:before] = 0
+
+    def get_minibatch(self,alpha=0):
+        idx = np.random.choice(np.arange(0,len(self)),self.min_size,p=self.normalized_weights(alpha),replace=False)
         try:
             minibatch = []
             for i in range(len(idx)):
