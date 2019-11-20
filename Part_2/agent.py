@@ -37,7 +37,9 @@ class Agent:
         self.action = None
         # Replay Buffer
         # DeepQNetwork defining agent actions
-        self.dqn = DQN(gamma = 0.5)
+        self.dqn = DQN(gamma = 0.005)
+        #Very good with 0.01
+        #gamma 0.6,without going right incentive
         #Reward
         self.total_reward = 0
         #epsilon
@@ -76,8 +78,8 @@ class Agent:
             #self.greedy_mode = not self.greedy_mode
 
             self.num_episode_completed+=1
-            if 1-(self.num_episode_completed/20)>0.1:
-                self.epsilon = 1-self.num_episode_completed/20
+            if 1-(self.num_episode_completed/30)>0.1:
+                self.epsilon = 1-self.num_episode_completed/30
             else:
                 self.epsilon = 0.1
             self.rightmost_ep = 0
@@ -93,36 +95,32 @@ class Agent:
         input_tensor = torch.tensor(state.reshape(1,2).astype(np.float32))
         q_values = self.dqn.q_network.forward(input_tensor).detach()
         greedy_action = int(q_values.argmax(1).numpy())
+        print(greedy_action)
 
         #print(self.rightmost_ep)
-        print(self.epsilon)
-        print(self.goal_reached_last_ep)
-        if self.greedy_mode:
-            print("a")
-            action = self.get_greedy_action(state)
-        else:
-            if (self.last_time_agent_got_more_right>=200) and self.is_frontier():
-                print("cheating")
-                if self.direction_up is None:
-                    best_action = np.argmax(q_values.reshape(4)[[1,3]])
-                    self.direction_up = best_action
-                if self.stuck == True:
-                    self.direction_up = not self.direction_up
-                if self.direction_up:
-                    discrete_action = np.random.choice([0,3],p=[0.5,0.5])
-                else:
-                    discrete_action = np.random.choice([0,1],p=[0.5,0.5])
+        #print(self.epsilon)
+        #print(self.goal_reached_last_ep)
+        if (self.last_time_agent_got_more_right>=30):
+            if self.direction_up is None:
+                best_action = np.argmax(q_values.reshape(9)[[1,3]])
+                self.direction_up = best_action
+            if self.stuck == True:
+                self.direction_up = not self.direction_up
+            if self.direction_up:
+                discrete_action = np.random.choice([0,3],p=[0.5,0.5])
             else:
-                self.direction_up=None
-                if self.num_steps_taken_ep>200 and self.is_frontier() and (not self.goal_reached_last_ep):
-                    self.epsilon = np.max([self.epsilon,0.15])
-                actions = np.arange(0,4)
-                probas = np.ones(4)*(self.epsilon/4)
-                probas[greedy_action] = 1-self.epsilon + (self.epsilon/4)
-                discrete_action = np.random.choice(actions,p=probas)
-                if (self.epsilon-self.delta)>=0.01:
-                    self.epsilon -= self.delta
-            action = self._discrete_action_to_continuous(discrete_action)
+                discrete_action = np.random.choice([0,1],p=[0.5,0.5])
+        else:
+            self.direction_up=None
+            if self.num_steps_taken_ep>200 and self.is_frontier() and (not self.goal_reached_last_ep):
+                self.epsilon = np.max([self.epsilon,0.15])
+            actions = np.arange(0,9)
+            probas = np.ones(9)*(self.epsilon/9)
+            probas[greedy_action] = 1-self.epsilon + (self.epsilon/9)
+            discrete_action = np.random.choice(actions,p=probas)
+            if (self.epsilon-self.delta)>=0.01:
+                self.epsilon -= self.delta
+        action = self._discrete_action_to_continuous(discrete_action)
 
         # Update the number of steps which the agent has taken
         self.num_steps_taken += 1
@@ -137,24 +135,27 @@ class Agent:
     # Function to set the next state and distance, which resulted from applying action self.action at state self.state
     def set_next_state_and_distance(self, next_state, distance_to_goal):
         # Convert the distance to a reward
-        reward = (0.8 - distance_to_goal)
-        #if (self.state[0] > next_state[0]):
-        #    reward -= 5
+        reward = (0.9 - distance_to_goal)
+        if (self.state[0] > next_state[0]):
+            reward -= 2
 
-        reward += (next_state[0] - self.state[0])*5
-        if (self.state[0]==next_state[0]):
-            reward -= 0.02
+        #if (self.state[0]==next_state[0]):
+        #    reward -= 0.04
 
-        if (self.state == next_state).all():
-            reward -= 1
+        if np.linalg.norm(self.state - next_state)<np.linalg.norm(self.action):
+            reward -= 0.5
+        else:
+            reward += (next_state[0] - self.state[0])*100
 
         if (self.has_reached_goal()):
             reward +=10
 
+        if (self.state == next_state).all():
+            reward-=10
         #if (self.state[0]>0.8):
         #    reward += 0.3
 
-        print(reward)
+        #print(reward)
         self.last_distance_to_goal = distance_to_goal
 
         if self.rightmost_ep<self.state[0]:
@@ -177,10 +178,11 @@ class Agent:
                                reward, next_state)
 
         self.dqn.replay_buffer.add_weight()
+        #print(transition_discrete)
         self.dqn.replay_buffer.append(transition_discrete)
 
         if self.dqn.replay_buffer.is_full_enough():
-            mini_batch = self.dqn.replay_buffer.get_minibatch(alpha=0.7)
+            mini_batch = self.dqn.replay_buffer.get_minibatch(alpha=0.5)
             loss = self.dqn.train_q_network(mini_batch)
 
         self.total_reward+= reward
@@ -203,10 +205,16 @@ class Agent:
             continuous_action = np.array([-0.02, 0], dtype=np.float32)
         elif discrete_action == 3 :#Move up
             continuous_action = np.array([0, 0.02], dtype=np.float32)
-        #elif discrete_action == 4: #diago up
-        #    continuous_action = np.array([0.01, 0.01], dtype=np.float32)
-        #elif discrete_action == 5: #diago down
-        #    continuous_action = np.array([0.01, -0.01], dtype=np.float32)
+        elif discrete_action == 4: #diago up
+            continuous_action = np.array([0.01, 0.01], dtype=np.float32)
+        elif discrete_action == 5: #diago down
+            continuous_action = np.array([0.01, -0.01], dtype=np.float32)
+        elif discrete_action == 6: #forward little
+            continuous_action = np.array([0.01, 0.0], dtype=np.float32)
+        elif discrete_action == 7: #up little
+            continuous_action = np.array([0.00, 0.01], dtype=np.float32)
+        elif discrete_action == 8: #down little
+            continuous_action = np.array([0.0, -0.01], dtype=np.float32)
         return continuous_action
 
     def _continuous_action_to_discrete(self, continuous_action):
@@ -218,10 +226,16 @@ class Agent:
             discrete_action = 2
         elif (continuous_action == np.array([0, 0.02], dtype=np.float32)).all() :#Move up
             discrete_action = 3
-        #elif (continuous_action == np.array([0.01, 0.01], dtype=np.float32)).all():
-        #    discrete_action = 4
-        #elif (continuous_action == np.array([0.01, -0.01], dtype=np.float32)).all():
-        #    continuous_action =5
+        elif (continuous_action == np.array([0.01, 0.01], dtype=np.float32)).all(): #diago up
+            discrete_action = 4
+        elif (continuous_action == np.array([0.01, -0.01], dtype=np.float32)).all(): #diago down
+            discrete_action = 5
+        elif (continuous_action == np.array([0.01, 0.0], dtype=np.float32)).all(): #forward little
+            discrete_action = 6
+        elif (continuous_action == np.array([0.00, 0.01], dtype=np.float32)).all(): #up little
+            discrete_action = 7
+        elif (continuous_action == np.array([0.0, -0.01], dtype=np.float32)).all(): #down little
+            discrete_action = 8
         else:
             raise ValueError('not one of actions permited')
         return discrete_action
@@ -246,13 +260,13 @@ class DQN:
     # The class initialisation function.
     def __init__(self,gamma):
         # Create a Q-network, which predicts the q-value for a particular state.
-        self.q_network = Network(input_dimension=2, output_dimension=4)
+        self.q_network = Network(input_dimension=2, output_dimension=9)
         # Define the optimiser which is used when updating the Q-network. The learning rate determines how big each gradient step is during backpropagation.
-        self.optimiser = torch.optim.Adam(self.q_network.parameters(), lr=0.001)
-        self.target_network = Network(input_dimension=2, output_dimension=4)
+        self.optimiser = torch.optim.Adam(self.q_network.parameters(), lr=0.002)
+        self.target_network = Network(input_dimension=2, output_dimension=9)
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.gamma = gamma
-        self.replay_buffer = ReplayBuffer(min_size=50,max_size=10**6)
+        self.replay_buffer = ReplayBuffer(min_size=30,max_size=10**6)
 
     # Function that is called whenever we want to train the Q-network. Each call to this function takes in a transition tuple containing the data we use to update the Q-network.
     def train_q_network(self, transition):
@@ -351,9 +365,9 @@ class Network(torch.nn.Module):
         # Call the initialisation function of the parent class.
         super(Network, self).__init__()
         # Define the network layers. This example network has two hidden layers, each with 100 units.
-        self.layer_1 = torch.nn.Linear(in_features=input_dimension, out_features=100)
-        self.layer_2 = torch.nn.Linear(in_features=100, out_features=100)
-        self.output_layer = torch.nn.Linear(in_features=100, out_features=output_dimension)
+        self.layer_1 = torch.nn.Linear(in_features=input_dimension, out_features=300)
+        self.layer_2 = torch.nn.Linear(in_features=300, out_features=300)
+        self.output_layer = torch.nn.Linear(in_features=300, out_features=output_dimension)
 
     # Function which sends some input data through the network and returns the network's output. In this example, a ReLU activation function is used for both hidden layers, but the output layer has no activation function (it is just a linear layer).
     def forward(self, input):
