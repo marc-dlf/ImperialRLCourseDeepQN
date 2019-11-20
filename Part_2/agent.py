@@ -25,7 +25,7 @@ class Agent:
     # Function to initialise the agent
     def __init__(self):
         # Set the episode length
-        self.episode_length = 600
+        self.episode_length = 200
         self.episode_length_greedy = 100
         self.num_episode_completed = 0
         # Reset the total number of steps which the agent has taken
@@ -42,7 +42,7 @@ class Agent:
         self.total_reward = 0
         #epsilon
         self.epsilon = 1
-        self.delta = 0.001
+        self.delta = 0.002
         self.stuck = False
 
         ## last time the reward increased
@@ -55,6 +55,8 @@ class Agent:
         self.direction_up = True
         self.goal_reached_last_ep = False
         self.greedy_mode = False
+
+        self.max_magnitude = 0.02
 
     # Function to check whether the agent has reached the end of an episode
     def has_finished_episode(self):
@@ -90,39 +92,12 @@ class Agent:
     # Function to get the next action, using whatever method you like
     def get_next_action(self, state):
         # Here, the action is random, but you can change this
-        input_tensor = torch.tensor(state.reshape(1,2).astype(np.float32))
-        q_values = self.dqn.q_network.forward(input_tensor).detach()
-        greedy_action = int(q_values.argmax(1).numpy())
-
-        #print(self.rightmost_ep)
-        print(self.epsilon)
-        print(self.goal_reached_last_ep)
-        if self.greedy_mode:
-            print("a")
-            action = self.get_greedy_action(state)
+        if self.epsilon>0.7:
+            action = self.dqn.cross_entropy(state,self.dqn.q_network,self.epsilon).reshape(2)
         else:
-            if (self.last_time_agent_got_more_right>=200) and self.is_frontier():
-                print("cheating")
-                if self.direction_up is None:
-                    best_action = np.argmax(q_values.reshape(6)[[1,3]])
-                    self.direction_up = best_action
-                if self.stuck == True:
-                    self.direction_up = not self.direction_up
-                if self.direction_up:
-                    discrete_action = np.random.choice([0,3],p=[0.5,0.5])
-                else:
-                    discrete_action = np.random.choice([0,1],p=[0.5,0.5])
-            else:
-                self.direction_up=None
-                if self.num_steps_taken_ep>200 and self.is_frontier() and (not self.goal_reached_last_ep):
-                    self.epsilon = np.max([self.epsilon,0.15])
-                actions = np.arange(0,6)
-                probas = np.ones(6)*(self.epsilon/6)
-                probas[greedy_action] = 1-self.epsilon + (self.epsilon/6)
-                discrete_action = np.random.choice(actions,p=probas)
-                if (self.epsilon-self.delta)>=0.01:
-                    self.epsilon -= self.delta
-            action = self._discrete_action_to_continuous(discrete_action)
+            action = self.dqn.cross_entropy(state,self.dqn.q_network).reshape(2)
+        self.epsilon-=self.delta
+        print(self.epsilon)
 
         # Update the number of steps which the agent has taken
         self.num_steps_taken += 1
@@ -141,15 +116,15 @@ class Agent:
         #if (self.state[0] > next_state[0]):
         #    reward -= 5
 
-        reward += (next_state[0] - self.state[0])*5
-        if (self.state[0]==next_state[0]):
-            reward -= 0.02
+        #reward += (next_state[0] - self.state[0])*5
+        #if (self.state[0]==next_state[0]):
+        #    reward -= 0.02
 
         if (self.state == next_state).all():
             reward -= 1
 
-        if (self.has_reached_goal()):
-            reward +=10
+        #if (self.has_reached_goal()):
+        #    reward +=10
 
         #if (self.state[0]>0.8):
         #    reward += 0.3
@@ -166,18 +141,18 @@ class Agent:
         else:
             self.last_time_agent_got_more_right+= 1
 
-        self.is_stuck(self.action,self.state,next_state)
+        #self.is_stuck(self.action,self.state,next_state)
 
         if (self.num_steps_taken % 50):
             self.dqn.update_target_network()
         # Create a transition
         transition = (self.state, self.action, reward, next_state)
         # Add this transition to the replay buffer (state,action,reward,next_state,transition_index,initial wieght)
-        transition_discrete = (self.state, self._continuous_action_to_discrete(self.action),
-                               reward, next_state)
+        #transition_discrete = (self.state, self._continuous_action_to_discrete(self.action),
+        #                       reward, next_state)
 
         self.dqn.replay_buffer.add_weight()
-        self.dqn.replay_buffer.append(transition_discrete)
+        self.dqn.replay_buffer.append(transition)
 
         if self.dqn.replay_buffer.is_full_enough():
             mini_batch = self.dqn.replay_buffer.get_minibatch(alpha=0.7)
@@ -193,38 +168,6 @@ class Agent:
         action = self._discrete_action_to_continuous(int(q_values.argmax(1).numpy()))
         return action
 
-        # Function to convert discrete action (as used by a DQN) to a continuous action (as used by the environment).
-    def _discrete_action_to_continuous(self, discrete_action):
-        if discrete_action == 0:  # Move right
-            continuous_action = np.array([0.02, 0], dtype=np.float32)
-        elif discrete_action == 1:#Move down
-            continuous_action = np.array([0, -0.02], dtype=np.float32)
-        elif discrete_action == 2:#Move left
-            continuous_action = np.array([-0.02, 0], dtype=np.float32)
-        elif discrete_action == 3 :#Move up
-            continuous_action = np.array([0, 0.02], dtype=np.float32)
-        elif discrete_action == 4: #diago up
-            continuous_action = np.array([0.01, 0.01], dtype=np.float32)
-        elif discrete_action == 5: #diago down
-            continuous_action = np.array([0.01, -0.01], dtype=np.float32)
-        return continuous_action
-
-    def _continuous_action_to_discrete(self, continuous_action):
-        if (continuous_action == np.array([0.02, 0], dtype=np.float32)).all():  # Move right
-            discrete_action = 0
-        elif (continuous_action == np.array([0, -0.02], dtype=np.float32)).all():#Move down
-            discrete_action = 1
-        elif (continuous_action == np.array([-0.02, 0], dtype=np.float32)).all():#Move left
-            discrete_action = 2
-        elif (continuous_action == np.array([0, 0.02], dtype=np.float32)).all() :#Move up
-            discrete_action = 3
-        elif (continuous_action == np.array([0.01, 0.01], dtype=np.float32)).all():
-            discrete_action = 4
-        elif (continuous_action == np.array([0.01, -0.01], dtype=np.float32)).all():
-            discrete_action =5
-        else:
-            raise ValueError('not one of actions permited')
-        return discrete_action
 
     def is_stuck(self,action,state,next_state):
         if (self._continuous_action_to_discrete(action)==1 or self._continuous_action_to_discrete(action)==3) and (state==next_state).all():
@@ -246,13 +189,13 @@ class DQN:
     # The class initialisation function.
     def __init__(self,gamma):
         # Create a Q-network, which predicts the q-value for a particular state.
-        self.q_network = Network(input_dimension=2, output_dimension=6)
+        self.q_network = Network(input_dimension=4, output_dimension=1)
         # Define the optimiser which is used when updating the Q-network. The learning rate determines how big each gradient step is during backpropagation.
         self.optimiser = torch.optim.Adam(self.q_network.parameters(), lr=0.001)
-        self.target_network = Network(input_dimension=2, output_dimension=6)
+        self.target_network = Network(input_dimension=4, output_dimension=1)
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.gamma = gamma
-        self.replay_buffer = ReplayBuffer(min_size=50,max_size=10**6)
+        self.replay_buffer = ReplayBuffer(min_size=30,max_size=10**6)
 
     # Function that is called whenever we want to train the Q-network. Each call to this function takes in a transition tuple containing the data we use to update the Q-network.
     def train_q_network(self, transition):
@@ -281,32 +224,39 @@ class DQN:
         transition_idx = transition[:,4].reshape(batch_size).astype(np.int64)
 
         states_batch = np.array([state.reshape(1,2) for state in transition[:,0]])
+        action_batch = np.array([action.reshape(1,2) for action in transition[:,1]])
         next_states_batch = np.array([state.reshape(1,2) for state in transition[:,3]])
 
         ### extracting batches array from transition
 
-        input_batch =  states_batch.reshape(batch_size,2).astype(np.float32)
-        action_batch = transition[:,1].reshape(batch_size,1).astype(np.long)
+        input_batch =  np.hstack((states_batch,action_batch)).reshape(batch_size,4).astype(np.float32)
         reward_batch = transition[:,2].reshape(batch_size,1).astype(np.float32)
         next_states_batch = next_states_batch.reshape(batch_size,2).astype(np.float32)
 
         ### transforming arrays into tensors
 
         input_tensor = torch.tensor(input_batch)
-        action_tensor = torch.tensor(action_batch)
         reward_tensor = torch.tensor(reward_batch)
         next_states_tensor = torch.tensor(next_states_batch)
 
         ### Computing the predicted Q value for state s
 
         q_values = self.q_network.forward(input_tensor)
-        q_values = torch.gather(q_values,1,action_tensor)
 
         ### Computing the actual Q value for this step
 
         #target_q_values = self.q_network.forward(next_states_tensor)
-        target_q_values = self.target_network.forward(next_states_tensor)
-        target_q_values = torch.gather(target_q_values,1, target_q_values.argmax(1).view(batch_size,1))
+        target_q_actions = None
+        for next_state in next_states_batch:
+            if target_q_actions is None:
+                target_q_actions = self.cross_entropy(next_state,self.target_network).reshape(1,2)
+            else:
+                target_q_actions = np.vstack((target_q_actions,self.cross_entropy(next_state,self.target_network).reshape(1,2)))
+        target_q_actions = target_q_actions.astype(np.float32)
+        input_target = np.hstack((next_states_batch,target_q_actions)).reshape(batch_size,4).astype(np.float32)
+        input_target_tensor = torch.tensor(input_target)
+
+        target_q_values = self.target_network.forward(input_target_tensor)
 
         predicted_sum_future_rewards = reward_tensor.add(target_q_values*self.gamma)
         weights_updated = predicted_sum_future_rewards.detach().numpy().reshape(batch_size) - q_values.detach().numpy().reshape(batch_size)
@@ -318,30 +268,21 @@ class DQN:
 
         return loss
 
-    def get_greedy_action(self,state,mode):
-        best_reward = -100
-        best_action = -100
-
-        if mode==0:
-            for i in range(4):
-                input_state_action = np.append(state,i).reshape(1,3).astype(np.float32)
-                input_tensor = torch.tensor(input_state_action)
-                predicted_reward = self.q_network.forward(input_tensor)
-
-                if predicted_reward>best_reward:
-                    best_reward = predicted_reward
-                    best_action = i
-
-
-        elif mode==1:
-            input_tensor = torch.tensor(state.reshape(1,2).astype(np.float32))
-            q_values = self.q_network.forward(input_tensor)
-            best_action = int(q_values.argmax(1).numpy())
-
+    def cross_entropy(self,state,network,epsilon=None):
+        action_2d = np.random.uniform(0.,0.01,size=(50,2))
+        state_vector = state.reshape(1,2).repeat(50,axis=0)
+        input_tensor = torch.tensor(np.hstack((state_vector,action_2d)).astype(np.float32))
+        for i in range(3):
+            q_values = network.forward(input_tensor).detach().numpy()
+            max_actions = np.array(q_values.reshape(50).argsort()[-4:][::-1])
+            mean = np.mean(action_2d[max_actions,:],axis=0)
+            var = np.var(action_2d[max_actions,:],axis=0)
+            action_2d = np.random.multivariate_normal(mean,[[var[0],0],[0,var[1]]],size=50)
+        if epsilon is None:
+            return mean.reshape(2,1).astype(np.float32)
         else:
-            raise ValueError('mode must be either 0 or 1')
-
-        return best_action
+            action_2d = np.array([[0.02,0.0],[-0.02,0.0],[0.0,0.02],[0.,-0.02]])
+            return action_2d[np.random.choice(np.arange(0,4)),:].reshape(2,1).astype(np.float32)
 
 # The Network class inherits the torch.nn.Module class, which represents a neural network.
 class Network(torch.nn.Module):
