@@ -343,6 +343,24 @@ class DQN:
 
         return best_action
 
+    def get_qvalues(self,starting_point,environment):
+        qvalues = np.zeros((11,11,4))
+        for i in np.arange(-5,6):
+            for j in np.arange(-5,6):
+                q_x = np.max([starting_point[0],0.1]) + i*0.02
+                q_y = np.min([np.max([starting_point[1],0.1]),0.9]) + j*0.02
+                cell_color = np.array(environment.image[environment.magnification-1-int(q_y*environment.magnification),int(q_x*environment.magnification)])
+                print(np.array([q_x,q_y]),cell_color)
+                print(np.array([int(q_x*environment.magnification),int(environment.magnification-1-q_y*environment.magnification)]))
+                if (cell_color == np.array([100,100,100])).all():
+                    qvalues[i,j,:] = np.array([-100,-100,-100,-100])
+                else:
+                    input_state = np.array([(q_x),(q_y)]).reshape(1,2).astype(np.float32)
+                    input_tensor = torch.tensor(input_state)
+                    predicted_qvalues = self.q_network.forward(input_tensor)
+                    qvalues[i,j,:] = predicted_qvalues.detach().numpy().reshape(4)
+        return qvalues
+
 # The Network class inherits the torch.nn.Module class, which represents a neural network.
 class Network(torch.nn.Module):
 
