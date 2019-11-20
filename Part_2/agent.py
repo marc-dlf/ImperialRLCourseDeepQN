@@ -37,7 +37,7 @@ class Agent:
         self.action = None
         # Replay Buffer
         # DeepQNetwork defining agent actions
-        self.dqn = DQN(gamma = 0.005)
+        self.dqn = DQN(gamma = 0.008)
         #Very good with 0.01
         #gamma 0.6,without going right incentive
         #Reward
@@ -78,10 +78,10 @@ class Agent:
             #self.greedy_mode = not self.greedy_mode
 
             self.num_episode_completed+=1
-            if 1-(self.num_episode_completed/30)>0.1:
+            if 1-(self.num_episode_completed/30)>0.05:
                 self.epsilon = 1-self.num_episode_completed/30
             else:
-                self.epsilon = 0.1
+                self.epsilon = 0.05
             self.rightmost_ep = 0
             self.num_steps_taken_ep = 0
 
@@ -96,11 +96,12 @@ class Agent:
         q_values = self.dqn.q_network.forward(input_tensor).detach()
         greedy_action = int(q_values.argmax(1).numpy())
         print(greedy_action)
+        print(self.epsilon)
 
         #print(self.rightmost_ep)
         #print(self.epsilon)
         #print(self.goal_reached_last_ep)
-        if (self.last_time_agent_got_more_right>=30):
+        if (self.last_time_agent_got_more_right>=30) and (self.state[0]<=0.9):
             if self.direction_up is None:
                 best_action = np.argmax(q_values.reshape(9)[[1,3]])
                 self.direction_up = best_action
@@ -118,7 +119,7 @@ class Agent:
             probas = np.ones(9)*(self.epsilon/9)
             probas[greedy_action] = 1-self.epsilon + (self.epsilon/9)
             discrete_action = np.random.choice(actions,p=probas)
-            if (self.epsilon-self.delta)>=0.01:
+            if (self.epsilon-self.delta)>=0.05:
                 self.epsilon -= self.delta
         action = self._discrete_action_to_continuous(discrete_action)
 
@@ -135,20 +136,20 @@ class Agent:
     # Function to set the next state and distance, which resulted from applying action self.action at state self.state
     def set_next_state_and_distance(self, next_state, distance_to_goal):
         # Convert the distance to a reward
-        reward = (0.9 - distance_to_goal)
+        reward = 0.
         if (self.state[0] > next_state[0]):
             reward -= 2
 
-        #if (self.state[0]==next_state[0]):
-        #    reward -= 0.04
+        if (self.state[0]==next_state[0]):
+            reward -= 0.4
 
         if np.linalg.norm(self.state - next_state)<np.linalg.norm(self.action):
             reward -= 0.5
         else:
-            reward += (next_state[0] - self.state[0])*100
+            reward += (next_state[0] - self.state[0])*150
 
         if (self.has_reached_goal()):
-            reward +=10
+            reward +=100
 
         if (self.state == next_state).all():
             reward-=10
@@ -182,7 +183,7 @@ class Agent:
         self.dqn.replay_buffer.append(transition_discrete)
 
         if self.dqn.replay_buffer.is_full_enough():
-            mini_batch = self.dqn.replay_buffer.get_minibatch(alpha=0.5)
+            mini_batch = self.dqn.replay_buffer.get_minibatch(alpha=0.3)
             loss = self.dqn.train_q_network(mini_batch)
 
         self.total_reward+= reward
@@ -262,11 +263,11 @@ class DQN:
         # Create a Q-network, which predicts the q-value for a particular state.
         self.q_network = Network(input_dimension=2, output_dimension=9)
         # Define the optimiser which is used when updating the Q-network. The learning rate determines how big each gradient step is during backpropagation.
-        self.optimiser = torch.optim.Adam(self.q_network.parameters(), lr=0.002)
+        self.optimiser = torch.optim.Adam(self.q_network.parameters(), lr=0.001)
         self.target_network = Network(input_dimension=2, output_dimension=9)
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.gamma = gamma
-        self.replay_buffer = ReplayBuffer(min_size=30,max_size=10**6)
+        self.replay_buffer = ReplayBuffer(min_size=50,max_size=1000)#30;10**6
 
     # Function that is called whenever we want to train the Q-network. Each call to this function takes in a transition tuple containing the data we use to update the Q-network.
     def train_q_network(self, transition):
