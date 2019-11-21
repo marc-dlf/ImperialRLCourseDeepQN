@@ -92,7 +92,6 @@ class Agent:
                 if self.has_reached_goal():
                     self.dqn.optimiser = torch.optim.Adam(self.dqn.q_network.parameters(), lr=0.)
 
-                print(self.last_distance_to_goal)
                 return True
             else:
                 False
