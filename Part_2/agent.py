@@ -37,7 +37,7 @@ class Agent:
         self.action = None
         # Replay Buffer
         # DeepQNetwork defining agent actions
-        self.dqn = DQN(gamma = 0.01)
+        self.dqn = DQN(gamma = 0.9)
         #Reward
         self.total_reward = 0
         #epsilon
@@ -60,25 +60,50 @@ class Agent:
         ## unstuck)
         self.direction_up = None
         self.goal_reached_last_ep = False
+        self.greedy_mode = False
+        self.best_greedy_mode_dist = 0
+        self.best_greedy_model = None
 
     # Function to check whether the agent has reached the end of an episode
     def has_finished_episode(self):
-        if ((self.num_steps_taken_ep % self.episode_length == 0) and (self.num_steps_taken_ep!= 0)) or (self.has_reached_goal()):
-            if self.has_reached_goal():
-                self.goal_reached_last_ep = True
-            else:
-                self.goal_reached_last_ep = False
 
-            self.num_episode_completed+=1
-            if 1-(self.num_episode_completed/80)>0.1:
-                self.epsilon = 1-self.num_episode_completed/80
+        if (not self.greedy_mode):
+            if ((self.num_steps_taken_ep % self.episode_length == 0) and (self.num_steps_taken_ep!= 0)) or (self.has_reached_goal()):
+                if self.has_reached_goal():
+                    self.goal_reached_last_ep = True
+                    if (self.episode_length-1)>=150:
+                        self.episode_length -=1
+                else:
+                    self.goal_reached_last_ep = False
+
+                self.num_episode_completed+=1
+
+                if 1-(self.num_episode_completed/80)>0.1:
+                    self.epsilon = 1-self.num_episode_completed/80
+                else:
+                    self.epsilon = 0.1
+
+                self.rightmost_ep = 0
+                self.num_steps_taken_ep = 0
+
+                if self.num_episode_completed>=10:
+                    self.greedy_mode = not self.greedy_mode
+                return True
             else:
-                self.epsilon = 0.1
-            self.rightmost_ep = 0
-            self.num_steps_taken_ep = 0
-            return True
+                return False
+
         else:
-            return False
+            if ((self.num_steps_taken_ep % self.episode_length_greedy == 0) and (self.num_steps_taken_ep!= 0)) or (self.has_reached_goal()):
+                self.greedy_mode = not self.greedy_mode
+                if self.last_distance_to_goal<=self.best_greedy_mode_dist:
+                    self.best_greedy_mode_dist = self.last_distance_to_goal
+                    self.best_greedy_model = torch.nn.Module.state_dict(self.dqn.q_network
+                                                                        )
+                if self.has_reached_goal():
+                    self.dqn.optimiser = torch.optim.Adam(self.dqn.q_network.parameters(), lr=0.)
+                return True
+            else:
+                False
 
     # Function to get the next action, using whatever method you like
     def get_next_action(self, state):
@@ -87,27 +112,30 @@ class Agent:
         q_values = self.dqn.q_network.forward(input_tensor).detach()
         greedy_action = int(q_values.argmax(1).numpy())
 
-        ## If the agent made no progress --> tunnel mode
-        if (self.last_time_agent_got_more_right>=30):
-            if self.direction_up is None:
-                best_action = np.argmax(q_values.reshape(9)[[1,3]])
-                self.direction_up = best_action
-            if self.stuck == True:
-                self.direction_up = not self.direction_up
-            if self.direction_up:
-                discrete_action = np.random.choice([0,3],p=[0.5,0.5])
+        if not self.greedy_mode:
+            ## If the agent made no progress --> tunnel mode
+            if (self.last_time_agent_got_more_right>=200):
+                if self.direction_up is None:
+                    best_action = np.argmax(q_values.reshape(8)[[1,3]])
+                    self.direction_up = best_action
+                if self.stuck == True:
+                    self.direction_up = not self.direction_up
+                if self.direction_up:
+                    discrete_action = np.random.choice([0,3],p=[0.5,0.5])
+                else:
+                    discrete_action = np.random.choice([0,1],p=[0.5,0.5])
             else:
-                discrete_action = np.random.choice([0,1],p=[0.5,0.5])
-        else:
-            self.direction_up=None
-            actions = np.arange(0,9)
-            probas = np.ones(9)*(self.epsilon/9)
-            probas[greedy_action] = 1-self.epsilon + (self.epsilon/9)
-            discrete_action = np.random.choice(actions,p=probas)
-            if (self.epsilon-self.delta)>=0.1:
-                self.epsilon -= self.delta
+                self.direction_up=None
+                actions = np.arange(0,8)
+                probas = np.ones(8)*(self.epsilon/8)
+                probas[greedy_action] = 1-self.epsilon + (self.epsilon/8)
+                discrete_action = np.random.choice(actions,p=probas)
+                if (self.epsilon-self.delta)>=0.1:
+                    self.epsilon -= self.delta
 
-        action = self._discrete_action_to_continuous(discrete_action)
+            action = self._discrete_action_to_continuous(discrete_action)
+        else:
+            action = self.get_greedy_action(state)
 
         # Update the number of steps which the agent has taken
         self.num_steps_taken += 1
@@ -127,19 +155,19 @@ class Agent:
 
         # Malus if the agent goes left
         if (self.state[0] > next_state[0]):
-            reward -= 5
+            reward -= 0.9
         # Malus if the agent chooses an action which leads to no movement
         if (self.state == next_state).all():
-            reward-=10
+            reward -= 0.9
         # If the action resulted in a significant movement, the reward
         # corresponds to the number of steps on the right the agent made
         if np.linalg.norm(self.state - next_state)<np.linalg.norm(self.action)/10:
             reward -= 0.1
         else:
-            reward += (next_state[0] - self.state[0])*200
+            reward += (next_state[0] - self.state[0])*50
         # Bonus if the agent reaches the goal
         if (self.has_reached_goal()):
-            reward += 30
+            reward += 1
 
         self.last_distance_to_goal = distance_to_goal
 
@@ -160,7 +188,8 @@ class Agent:
 
         if self.dqn.replay_buffer.is_full_enough():
             mini_batch = self.dqn.replay_buffer.get_minibatch(alpha=0.3)
-            loss = self.dqn.train_q_network(mini_batch)
+            if not self.greedy_mode:
+                loss = self.dqn.train_q_network(mini_batch)
 
         self.total_reward+= reward
 
@@ -177,19 +206,17 @@ class Agent:
             continuous_action = np.array([0.02, 0], dtype=np.float32)
         elif discrete_action == 1:#Move down
             continuous_action = np.array([0, -0.02], dtype=np.float32)
-        elif discrete_action == 2:#Move left
-            continuous_action = np.array([-0.02, 0], dtype=np.float32)
-        elif discrete_action == 3 :#Move up
+        elif discrete_action == 2 :#Move up
             continuous_action = np.array([0, 0.02], dtype=np.float32)
-        elif discrete_action == 4: #diago up
+        elif discrete_action == 3: #diago up
             continuous_action = np.array([0.01, 0.01], dtype=np.float32)
-        elif discrete_action == 5: #diago down
+        elif discrete_action == 4: #diago down
             continuous_action = np.array([0.01, -0.01], dtype=np.float32)
-        elif discrete_action == 6: #forward little
+        elif discrete_action == 5: #forward little
             continuous_action = np.array([0.01, 0.0], dtype=np.float32)
-        elif discrete_action == 7: #up little
+        elif discrete_action == 6: #up little
             continuous_action = np.array([0.00, 0.01], dtype=np.float32)
-        elif discrete_action == 8: #down little
+        elif discrete_action == 7: #down little
             continuous_action = np.array([0.0, -0.01], dtype=np.float32)
         return continuous_action
 
@@ -198,20 +225,18 @@ class Agent:
             discrete_action = 0
         elif (continuous_action == np.array([0, -0.02], dtype=np.float32)).all():#Move down
             discrete_action = 1
-        elif (continuous_action == np.array([-0.02, 0], dtype=np.float32)).all():#Move left
-            discrete_action = 2
         elif (continuous_action == np.array([0, 0.02], dtype=np.float32)).all() :#Move up
-            discrete_action = 3
+            discrete_action = 2
         elif (continuous_action == np.array([0.01, 0.01], dtype=np.float32)).all(): #diago up
-            discrete_action = 4
+            discrete_action = 3
         elif (continuous_action == np.array([0.01, -0.01], dtype=np.float32)).all(): #diago down
-            discrete_action = 5
+            discrete_action = 4
         elif (continuous_action == np.array([0.01, 0.0], dtype=np.float32)).all(): #forward little
-            discrete_action = 6
+            discrete_action = 5
         elif (continuous_action == np.array([0.00, 0.01], dtype=np.float32)).all(): #up little
-            discrete_action = 7
+            discrete_action = 6
         elif (continuous_action == np.array([0.0, -0.01], dtype=np.float32)).all(): #down little
-            discrete_action = 8
+            discrete_action = 7
         else:
             raise ValueError('not one of actions permited')
         return discrete_action
@@ -244,10 +269,10 @@ class DQN:
     # The class initialisation function.
     def __init__(self,gamma):
         # Create a Q-network, which predicts the q-value for a particular state.
-        self.q_network = Network(input_dimension=2, output_dimension=9)
+        self.q_network = Network(input_dimension=2, output_dimension=8)
         # Define the optimiser which is used when updating the Q-network. The learning rate determines how big each gradient step is during backpropagation.
         self.optimiser = torch.optim.Adam(self.q_network.parameters(), lr=0.001)
-        self.target_network = Network(input_dimension=2, output_dimension=9)
+        self.target_network = Network(input_dimension=2, output_dimension=8)
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.gamma = gamma
         self.replay_buffer = ReplayBuffer(min_size=50,max_size=10**6)
