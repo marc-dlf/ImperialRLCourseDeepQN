@@ -1,20 +1,3 @@
-############################################################################
-############################################################################
-# THIS IS THE ONLY FILE YOU SHOULD EDIT
-#
-#
-# Agent must always have these five functions:
-#     __init__(self)
-#     has_finished_episode(self)
-#     get_next_action(self, state)
-#     set_next_state_and_distance(self, next_state, distance_to_goal)
-#     get_greedy_action(self, state)
-#
-#
-# You may add any other functions as you wish
-############################################################################
-############################################################################
-
 import numpy as np
 import torch
 import time
@@ -44,7 +27,6 @@ class Agent:
         self.epsilon = 1
         self.delta = 0.001
 
-
         ## The point the most on the right the agent reached (episode/ever)
         self.rightmost_ep = -100
         self.rightmost_ever = -100
@@ -54,21 +36,34 @@ class Agent:
         self.stuck = False
         ## Last distance to goal
         self.last_distance_to_goal = 1
+        self.goal_reached_last_ep = False
         ## Direction in tunnel mode (when the agent has not got a positive reward
         ## for a long time, we can suppose it is stuck in a long tunnel when
         ## it has to choose a direction up/down and stick to it until getting
         ## unstuck)
         self.direction_up = None
-        self.goal_reached_last_ep = False
+
+        #Storing the
         self.greedy_mode = False
         self.best_greedy_mode_dist = 0
-        self.best_greedy_model = None
 
     # Function to check whether the agent has reached the end of an episode
     def has_finished_episode(self):
 
         if (not self.greedy_mode):
-            if ((self.num_steps_taken_ep % self.episode_length == 0) and (self.num_steps_taken_ep!= 0)) or (self.has_reached_goal()):
+            if ((self.num_steps_taken_ep % self.episode_length == 0) \
+                and (self.num_steps_taken_ep!= 0)) or (self.has_reached_goal()):
+
+                self.num_episode_completed+=1
+
+                ## Decreasing the starting value of epsilon after each episode
+                if 1-(self.num_episode_completed/80)>0.1:
+                    self.epsilon = 1-self.num_episode_completed/80
+                else:
+                    self.epsilon = 0.1
+
+                ## If the goal was reached we want to reduce the length of an
+                ## episode
                 if self.has_reached_goal():
                     self.goal_reached_last_ep = True
                     if (self.episode_length-1)>=150:
@@ -76,31 +71,28 @@ class Agent:
                 else:
                     self.goal_reached_last_ep = False
 
-                self.num_episode_completed+=1
+                ## Starting to test the greedy policy after 10 episodes
+                if self.num_episode_completed>=10:
+                    self.greedy_mode = not self.greedy_mode
 
-                if 1-(self.num_episode_completed/80)>0.1:
-                    self.epsilon = 1-self.num_episode_completed/80
-                else:
-                    self.epsilon = 0.1
-
+                ## Reseting variables concerning only the episode
                 self.rightmost_ep = 0
                 self.num_steps_taken_ep = 0
 
-                if self.num_episode_completed>=10:
-                    self.greedy_mode = not self.greedy_mode
                 return True
             else:
                 return False
 
         else:
-            if ((self.num_steps_taken_ep % self.episode_length_greedy == 0) and (self.num_steps_taken_ep!= 0)) or (self.has_reached_goal()):
+            if ((self.num_steps_taken_ep % self.episode_length_greedy == 0) \
+                and (self.num_steps_taken_ep!= 0)) or (self.has_reached_goal()):
                 self.greedy_mode = not self.greedy_mode
-                if self.last_distance_to_goal<=self.best_greedy_mode_dist:
-                    self.best_greedy_mode_dist = self.last_distance_to_goal
-                    self.best_greedy_model = torch.nn.Module.state_dict(self.dqn.q_network
-                                                                        )
+
+                ## stops the training if greedy policy reaches goal in 100 steps
                 if self.has_reached_goal():
                     self.dqn.optimiser = torch.optim.Adam(self.dqn.q_network.parameters(), lr=0.)
+
+                print(self.last_distance_to_goal)
                 return True
             else:
                 False
@@ -108,14 +100,14 @@ class Agent:
     # Function to get the next action, using whatever method you like
     def get_next_action(self, state):
         # Here, the action is random, but you can change this
-        input_tensor = torch.tensor(state.reshape(1,2).astype(np.float32))
-        q_values = self.dqn.q_network.forward(input_tensor).detach()
-        greedy_action = int(q_values.argmax(1).numpy())
+        greedy_action = self.get_greedy_action(state)
 
         if not self.greedy_mode:
             ## If the agent made no progress --> tunnel mode
             if (self.last_time_agent_got_more_right>=200):
                 if self.direction_up is None:
+                    input_tensor = torch.tensor(state.reshape(1,2).astype(np.float32))
+                    q_values = self.dqn.q_network.forward(input_tensor).detach()
                     best_action = np.argmax(q_values.reshape(8)[[1,3]])
                     self.direction_up = best_action
                 if self.stuck == True:
@@ -128,14 +120,15 @@ class Agent:
                 self.direction_up=None
                 actions = np.arange(0,8)
                 probas = np.ones(8)*(self.epsilon/8)
-                probas[greedy_action] = 1-self.epsilon + (self.epsilon/8)
+                discrete_greedy = self._continuous_action_to_discrete(greedy_action)
+                probas[discrete_greedy] = 1-self.epsilon + (self.epsilon/8)
                 discrete_action = np.random.choice(actions,p=probas)
                 if (self.epsilon-self.delta)>=0.1:
                     self.epsilon -= self.delta
-
             action = self._discrete_action_to_continuous(discrete_action)
+
         else:
-            action = self.get_greedy_action(state)
+            action = greedy_action
 
         # Update the number of steps which the agent has taken
         self.num_steps_taken += 1
@@ -170,13 +163,13 @@ class Agent:
             reward += 1
 
         self.last_distance_to_goal = distance_to_goal
-
         self.update_state_of_progression()
+        self.set_stuck_variable(self.action,self.state,next_state)
 
-        self.is_stuck(self.action,self.state,next_state)
-
+        ## Update target network every 100 steps
         if (self.num_steps_taken % 100 == 0):
             self.dqn.update_target_network()
+
         # Create a transition
         transition = (self.state, self.action, reward, next_state)
         # Add this transition to the replay buffer (state,action,reward,next_state,transition_index,initial wieght)
@@ -188,6 +181,7 @@ class Agent:
 
         if self.dqn.replay_buffer.is_full_enough():
             mini_batch = self.dqn.replay_buffer.get_minibatch(alpha=0.3)
+            # Don't train in greedy_mode
             if not self.greedy_mode:
                 loss = self.dqn.train_q_network(mini_batch)
 
@@ -242,7 +236,7 @@ class Agent:
         return discrete_action
 
     ## is the agent stuck by a wall on top/bottom
-    def is_stuck(self,action,state,next_state):
+    def set_stuck_variable(self,action,state,next_state):
         if (self._continuous_action_to_discrete(action)==1 or \
             self._continuous_action_to_discrete(action)==3) and \
         (state==next_state).all():
@@ -254,6 +248,7 @@ class Agent:
     def has_reached_goal(self):
         return self.last_distance_to_goal<=0.03
 
+    ## See if the agent made any progress recently
     def update_state_of_progression(self):
         if self.rightmost_ep<self.state[0]:
             self.rightmost_ep = self.state[0]
@@ -321,17 +316,16 @@ class DQN:
         next_states_tensor = torch.tensor(next_states_batch)
 
         ### Computing the predicted Q value for state s
-
         q_values = self.q_network.forward(input_tensor)
         q_values = torch.gather(q_values,1,action_tensor)
 
-        ### Computing the actual Q value for this step
-
-        #target_q_values = self.q_network.forward(next_states_tensor)
+        ### Computing the target Q values
         target_q_values = self.target_network.forward(next_states_tensor)
         target_q_values = torch.gather(target_q_values,1, target_q_values.argmax(1).view(batch_size,1))
 
         predicted_sum_future_rewards = reward_tensor.add(target_q_values*self.gamma)
+
+        ### Update weights
         weights_updated = predicted_sum_future_rewards.detach().numpy().reshape(batch_size) - q_values.detach().numpy().reshape(batch_size)
         self.replay_buffer.weights[transition_idx] = np.abs(weights_updated) + 0.0001
 
