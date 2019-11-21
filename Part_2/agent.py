@@ -18,15 +18,14 @@ class Agent:
         self.state = None
         # The action variable stores the latest action which the agent has applied to the environment
         self.action = None
-        # Replay Buffer
         # DeepQNetwork defining agent actions
         self.dqn = DQN(gamma = 0.9)
-        #Reward
+        # Reward
         self.total_reward = 0
-        #epsilon
+        # Epsilon
         self.epsilon = 1
+        # Epsilin decay coefficient
         self.delta = 0.001
-
         ## The point the most on the right the agent reached (episode/ever)
         self.rightmost_ep = -100
         self.rightmost_ever = -100
@@ -37,20 +36,20 @@ class Agent:
         ## Last distance to goal
         self.last_distance_to_goal = 1
         self.goal_reached_last_ep = False
-        ## Direction in tunnel mode (when the agent has not got a positive reward
-        ## for a long time, we can suppose it is stuck in a long tunnel when
-        ## it has to choose a direction up/down and stick to it until getting
-        ## unstuck)
+        ##Direction in tunnel mode (when the agent has not got a positive reward
+        ##for a long time, we can suppose it is stuck in a long tunnel when
+        ##it has to choose a direction up/down and stick to it until getting
+        ##unstuck)
         self.direction_up = None
-
-        #Storing the
+        #Flag for greedy mode
         self.greedy_mode = False
-        self.best_greedy_mode_dist = 0
 
     # Function to check whether the agent has reached the end of an episode
     def has_finished_episode(self):
 
         if (not self.greedy_mode):
+            # Episode is finished if the agent has taken the maximum number of steps
+            # or if it reached the goal
             if ((self.num_steps_taken_ep % self.episode_length == 0) \
                 and (self.num_steps_taken_ep!= 0)) or (self.has_reached_goal()):
 
@@ -91,37 +90,42 @@ class Agent:
                 ## stops the training if greedy policy reaches goal in 100 steps
                 if self.has_reached_goal():
                     self.dqn.optimiser = torch.optim.Adam(self.dqn.q_network.parameters(), lr=0.)
-
+                print(self.last_distance_to_goal)
                 return True
             else:
                 False
 
     # Function to get the next action, using whatever method you like
     def get_next_action(self, state):
-        # Here, the action is random, but you can change this
         greedy_action = self.get_greedy_action(state)
 
         if not self.greedy_mode:
-            ## If the agent made no progress --> tunnel mode
+            # If the agent made no progress for 200 steps --> tunnel mode
             if (self.last_time_agent_got_more_right>=200):
                 if self.direction_up is None:
+                    # Find maximum q-value between up and down at this position
                     input_tensor = torch.tensor(state.reshape(1,2).astype(np.float32))
                     q_values = self.dqn.q_network.forward(input_tensor).detach()
                     best_action = np.argmax(q_values.reshape(8)[[1,3]])
                     self.direction_up = best_action
+                # Inverting the direction if stuck
                 if self.stuck == True:
                     self.direction_up = not self.direction_up
+                # Here choose only between up and right
                 if self.direction_up:
                     discrete_action = np.random.choice([0,3],p=[0.5,0.5])
+                # Here choose only between down and right
                 else:
                     discrete_action = np.random.choice([0,1],p=[0.5,0.5])
             else:
                 self.direction_up=None
+                # Choice of action with epsilon greedy policy
                 actions = np.arange(0,8)
                 probas = np.ones(8)*(self.epsilon/8)
                 discrete_greedy = self._continuous_action_to_discrete(greedy_action)
                 probas[discrete_greedy] = 1-self.epsilon + (self.epsilon/8)
                 discrete_action = np.random.choice(actions,p=probas)
+                # Decay of epsilon
                 if (self.epsilon-self.delta)>=0.1:
                     self.epsilon -= self.delta
             action = self._discrete_action_to_continuous(discrete_action)
@@ -141,13 +145,39 @@ class Agent:
 
     # Function to set the next state and distance, which resulted from applying action self.action at state self.state
     def set_next_state_and_distance(self, next_state, distance_to_goal):
+
+        reward = self.compute_reward(next_state)
+        self.last_distance_to_goal = distance_to_goal
+        # Update the values where we know if the agent made progress recently
+        self.update_state_of_progression()
+        self.set_stuck_variable(self.action,self.state,next_state)
+
+        ## Update target network every 100 steps
+        if (self.num_steps_taken % 100 == 0):
+            self.dqn.update_target_network()
+
+        # Create a transition
+        transition = (self.state, self.action, reward, next_state)
+        # Add this transition to the replay buffer (state,action,reward,next_state,transition_index,initial wieght)
+        discretized_action = self._continuous_action_to_discrete(self.action)
+        transition_discrete = (self.state, discretized_action,reward, next_state)
+
+        self.dqn.replay_buffer.add_weight()
+        self.dqn.replay_buffer.append(transition_discrete)
+
+        if self.dqn.replay_buffer.is_full_enough():
+            mini_batch = self.dqn.replay_buffer.get_minibatch(alpha=0.3)
+            # Don't train in greedy_mode
+            if not self.greedy_mode:
+                loss = self.dqn.train_q_network(mini_batch)
+
+        self.total_reward+= reward
+
+
+    def compute_reward(self,next_state):
         # The reward is the addition of several bonuses and maluses with a fixed
         # negative initial value (corresponding to the cost of an action)
         reward = -1/10
-
-        # Malus if the agent goes left
-        if (self.state[0] > next_state[0]):
-            reward -= 0.9
         # Malus if the agent chooses an action which leads to no movement
         if (self.state == next_state).all():
             reward -= 0.9
@@ -160,31 +190,7 @@ class Agent:
         # Bonus if the agent reaches the goal
         if (self.has_reached_goal()):
             reward += 1
-
-        self.last_distance_to_goal = distance_to_goal
-        self.update_state_of_progression()
-        self.set_stuck_variable(self.action,self.state,next_state)
-
-        ## Update target network every 100 steps
-        if (self.num_steps_taken % 100 == 0):
-            self.dqn.update_target_network()
-
-        # Create a transition
-        transition = (self.state, self.action, reward, next_state)
-        # Add this transition to the replay buffer (state,action,reward,next_state,transition_index,initial wieght)
-        transition_discrete = (self.state, self._continuous_action_to_discrete(self.action),
-                               reward, next_state)
-
-        self.dqn.replay_buffer.add_weight()
-        self.dqn.replay_buffer.append(transition_discrete)
-
-        if self.dqn.replay_buffer.is_full_enough():
-            mini_batch = self.dqn.replay_buffer.get_minibatch(alpha=0.3)
-            # Don't train in greedy_mode
-            if not self.greedy_mode:
-                loss = self.dqn.train_q_network(mini_batch)
-
-        self.total_reward+= reward
+        return reward
 
     # Function to get the greedy action for a particular state
     def get_greedy_action(self,state):
@@ -234,7 +240,7 @@ class Agent:
             raise ValueError('not one of actions permited')
         return discrete_action
 
-    ## is the agent stuck by a wall on top/bottom
+    ## Is the agent stuck by a wall on top/bottom
     def set_stuck_variable(self,action,state,next_state):
         if (self._continuous_action_to_discrete(action)==1 or \
             self._continuous_action_to_discrete(action)==3) and \
@@ -243,7 +249,7 @@ class Agent:
         else:
             self.stuck = False
 
-    ## has the agent reached the goal
+    ## Has the agent reached the goal
     def has_reached_goal(self):
         return self.last_distance_to_goal<=0.03
 
@@ -359,6 +365,7 @@ class ReplayBuffer(deque):
         self.weights = np.array([])
         self.max_size = max_size
 
+    # Add a new transition and its weight to the buffer
     def add_weight(self):
         if len(self.weights)==0:
             self.weights = np.append(self.weights,1)
